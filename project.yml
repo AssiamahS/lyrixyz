@@ -1,0 +1,74 @@
+name: Lyrixyz
+options:
+  bundleIdPrefix: com.djsly
+  deploymentTarget:
+    iOS: "26.0"
+  xcodeVersion: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    DEVELOPMENT_TEAM: QGMAWHX827
+    MARKETING_VERSION: 1.0.1
+    CURRENT_PROJECT_VERSION: 1
+targets:
+  Lyrixyz:
+    type: application
+    platform: iOS
+    sources:
+      - path: Lyrixyz/App
+      - path: Lyrixyz/Shared
+      - path: Lyrixyz/Resources
+    dependencies:
+      - target: LyrixyzWidgets
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.djsly.lyrixyz
+      CODE_SIGN_STYLE: Automatic
+      TARGETED_DEVICE_FAMILY: 1
+      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      SUPPORTS_XR_DESIGNED_FOR: NO
+    info:
+      path: Lyrixyz/Resources/Info.plist
+      properties:
+        CFBundleName: lyrixyz
+        CFBundleDisplayName: lyrixyz
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSSupportsLiveActivities: true
+        NSAppleMusicUsageDescription: Reads what's playing to show its lyrics.
+        UIBackgroundModes:
+          - audio
+        CFBundleURLTypes:
+          - CFBundleURLName: com.djsly.lyrixyz
+            CFBundleURLSchemes:
+              - lyrixyz
+  LyrixyzWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Lyrixyz/Widget
+      - path: Lyrixyz/Shared
+    info:
+      path: Lyrixyz/Widget/Info.plist
+      properties:
+        CFBundleName: LyrixyzWidgets
+        CFBundleDisplayName: lyrixyz
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSSupportsLiveActivities: true
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.djsly.lyrixyz.widgets
+        SKIP_INSTALL: true
+schemes:
+  Lyrixyz:
+    build:
+      targets:
+        Lyrixyz: all
+    run:
+      config: Debug
