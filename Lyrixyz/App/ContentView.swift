@@ -4,6 +4,7 @@ import AuthenticationServices
 struct ContentView: View {
     @State private var model = PlayerModel()
     @Environment(\.webAuthenticationSession) private var webAuth
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         NavigationStack {
@@ -101,12 +102,6 @@ struct ContentView: View {
     private var spotifyControls: some View {
         VStack(spacing: 10) {
             if !model.spotifyConnected {
-                TextField("Spotify client ID (developer.spotify.com)", text: $model.spotifyClientID)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .font(.caption.monospaced())
-                    .padding(10)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
                 Button {
                     connectSpotify()
                 } label: {
@@ -115,7 +110,18 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.green)
-                .disabled(model.spotifyClientID.isEmpty)
+                DisclosureGroup("Use my own Spotify app") {
+                    TextField("Client ID (developer.spotify.com)", text: $model.spotifyClientID)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .font(.caption.monospaced())
+                        .padding(10)
+                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                    Text("Redirect URI on your app: lyrixyz://callback, or http://127.0.0.1:9900/ if Spotify rejects the custom scheme.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .font(.caption)
             } else {
                 Label("Spotify connected", systemImage: "checkmark.circle.fill")
                     .font(.caption)
@@ -125,12 +131,18 @@ struct ContentView: View {
     }
 
     private func connectSpotify() {
-        guard let url = model.spotifyAuthURL() else { return }
-        Task {
-            if let callback = try? await webAuth.authenticate(
-                using: url, callbackURLScheme: "lyrixyz") {
-                await model.handleSpotifyCallback(callback)
+        if !model.spotifyClientID.isEmpty, let url = model.spotifyPKCEAuthURL() {
+            // user's own Spotify app with the lyrixyz:// redirect
+            Task {
+                if let callback = try? await webAuth.authenticate(
+                    using: url, callbackURLScheme: "lyrixyz") {
+                    await model.handleSpotifyCallback(callback)
+                }
             }
+        } else if let url = model.spotifyAuthURL() {
+            // zero-setup: authorize in browser, loopback catches the code
+            openURL(url)
+            Task { await model.waitForSpotifyCode() }
         }
     }
 }

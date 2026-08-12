@@ -6,6 +6,46 @@ import ActivityKit
 struct LyrixyzWidgetBundle: WidgetBundle {
     var body: some Widget {
         LyrixyzLiveActivity()
+        LyrixyzLauncherWidget()
+    }
+}
+
+struct LauncherEntry: TimelineEntry {
+    let date: Date
+}
+
+struct LauncherProvider: TimelineProvider {
+    func placeholder(in context: Context) -> LauncherEntry { LauncherEntry(date: .now) }
+    func getSnapshot(in context: Context, completion: @escaping (LauncherEntry) -> Void) {
+        completion(LauncherEntry(date: .now))
+    }
+    func getTimeline(in context: Context, completion: @escaping (Timeline<LauncherEntry>) -> Void) {
+        completion(Timeline(entries: [LauncherEntry(date: .now)], policy: .never))
+    }
+}
+
+struct LyrixyzLauncherWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "LyrixyzLauncher", provider: LauncherProvider()) { _ in
+            VStack(spacing: 6) {
+                Image(systemName: "music.note.list")
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundStyle(.pink)
+                Text("lyrixyz")
+                    .font(.system(.caption, design: .rounded).weight(.heavy))
+                    .foregroundStyle(.white)
+                Text("play a song — lyrics go live")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .multilineTextAlignment(.center)
+            }
+            .containerBackground(for: .widget) {
+                LinearGradient(colors: [Color(red: 0.16, green: 0.02, blue: 0.06), Color(red: 0.45, green: 0.04, blue: 0.19)], startPoint: .top, endPoint: .bottom)
+            }
+        }
+        .configurationDisplayName("lyrixyz")
+        .description("Tap to open — lyrics follow whatever's playing.")
+        .supportedFamilies([.systemSmall])
     }
 }
 

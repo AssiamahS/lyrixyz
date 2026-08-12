@@ -3,6 +3,7 @@ import MediaPlayer
 import ActivityKit
 import AVFoundation
 import CryptoKit
+import Network
 import Observation
 
 struct LyricLine: Identifiable, Equatable {
@@ -241,13 +242,35 @@ final class PlayerModel {
         endActivity()
     }
 
-    // MARK: spotify auth (PKCE — client id only, no secret)
+    // MARK: spotify auth — one tap: opens the Spotify authorize page, code comes
+    // back on a loopback listener, token exchange uses the built-in app pair.
 
-    private(set) var pendingVerifier: String?
+    static let builtInID = "5f573c9620494bae87890c0f08a60293"
+    static let builtInSecret = "212476d9b0f3472eaa762d90b19b0ba8"
+    private static let loopback = "http://127.0.0.1:9900/"
+
+    private var effectiveClientID: String {
+        spotifyClientID.isEmpty ? Self.builtInID : spotifyClientID
+    }
 
     func spotifyAuthURL() -> URL? {
+        var comps = URLComponents(string: "https://accounts.spotify.com/authorize")!
+        comps.queryItems = [
+            URLQueryItem(name: "client_id", value: effectiveClientID),
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "redirect_uri", value: Self.loopback),
+            URLQueryItem(name: "scope", value: "user-read-currently-playing user-read-playback-state"),
+        ]
+        return comps.url
+    }
+
+    // Custom-scheme PKCE path — for a user-created Spotify app with lyrixyz://callback registered.
+    private(set) var pendingVerifier: String?
+
+    func spotifyPKCEAuthURL() -> URL? {
         guard !spotifyClientID.isEmpty else { return nil }
-        let verifier = Self.randomVerifier()
+        let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+        let verifier = String((0..<64).compactMap { _ in chars.randomElement() })
         pendingVerifier = verifier
         let challenge = Data(SHA256.hash(data: Data(verifier.utf8)))
             .base64EncodedString()
@@ -294,21 +317,57 @@ final class PlayerModel {
         status = "Spotify connected"
     }
 
+    func waitForSpotifyCode() async {
+        status = "Authorize in the browser…"
+        let catcher = LoopbackCatcher()
+        defer { catcher.stop() }
+        guard let code = try? await catcher.waitForCode(port: 9900, timeout: 180) else {
+            status = "Spotify sign-in timed out"
+            return
+        }
+        await exchange(code: code)
+    }
+
+    private func exchange(code: String) async {
+        var request = URLRequest(url: URL(string: "https://accounts.spotify.com/api/token")!)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        let pair = "\(effectiveClientID):\(spotifyClientID.isEmpty ? Self.builtInSecret : "")"
+        request.setValue("Basic \(Data(pair.utf8).base64EncodedString())", forHTTPHeaderField: "Authorization")
+        request.httpBody = [
+            "grant_type=authorization_code",
+            "code=\(code)",
+            "redirect_uri=\(Self.loopback)",
+        ].joined(separator: "&").data(using: .utf8)
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let token = json["access_token"] as? String else {
+            status = "Spotify sign-in failed"
+            return
+        }
+        accessToken = token
+        if let refresh = json["refresh_token"] as? String {
+            UserDefaults.standard.set(refresh, forKey: "spotifyRefreshToken")
+        }
+        UserDefaults.standard.set(Date().addingTimeInterval(3000), forKey: "spotifyTokenExpiry")
+        status = "Spotify connected"
+    }
+
     private func validSpotifyToken() async -> String? {
         if let accessToken,
            let expiry = UserDefaults.standard.object(forKey: "spotifyTokenExpiry") as? Date,
            expiry > Date() {
             return accessToken
         }
-        guard let refresh = UserDefaults.standard.string(forKey: "spotifyRefreshToken"),
-              !spotifyClientID.isEmpty else { return nil }
+        guard let refresh = UserDefaults.standard.string(forKey: "spotifyRefreshToken") else { return nil }
         var request = URLRequest(url: URL(string: "https://accounts.spotify.com/api/token")!)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        let pair = "\(effectiveClientID):\(spotifyClientID.isEmpty ? Self.builtInSecret : "")"
+        request.setValue("Basic \(Data(pair.utf8).base64EncodedString())", forHTTPHeaderField: "Authorization")
         request.httpBody = [
             "grant_type=refresh_token",
             "refresh_token=\(refresh)",
-            "client_id=\(spotifyClientID)",
         ].joined(separator: "&").data(using: .utf8)
         guard let (data, _) = try? await URLSession.shared.data(for: request),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -320,9 +379,67 @@ final class PlayerModel {
         UserDefaults.standard.set(Date().addingTimeInterval(3000), forKey: "spotifyTokenExpiry")
         return token
     }
+}
 
-    private static func randomVerifier() -> String {
-        let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
-        return String((0..<64).compactMap { _ in chars.randomElement() })
+/// Catches the Spotify redirect on 127.0.0.1 so sign-in is one tap — no pasted IDs.
+final class LoopbackCatcher: @unchecked Sendable {
+    private var listener: NWListener?
+    private let lock = NSLock()
+    private var resumed = false
+
+    func waitForCode(port: UInt16, timeout: TimeInterval) async throws -> String {
+        try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask {
+                try await self.listen(port: port)
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(timeout))
+                throw URLError(.timedOut)
+            }
+            let code = try await group.next()!
+            group.cancelAll()
+            return code
+        }
+    }
+
+    private func listen(port: UInt16) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            guard let nwPort = NWEndpoint.Port(rawValue: port),
+                  let listener = try? NWListener(using: .tcp, on: nwPort) else {
+                continuation.resume(throwing: URLError(.cannotConnectToHost))
+                return
+            }
+            self.listener = listener
+            listener.newConnectionHandler = { [weak self] connection in
+                connection.start(queue: .global())
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { data, _, _, _ in
+                    let request = String(data: data ?? Data(), encoding: .utf8) ?? ""
+                    var code: String?
+                    if let range = request.range(of: "code=") {
+                        code = String(request[range.upperBound...]
+                            .prefix { $0 != "&" && $0 != " " && $0 != "\r" })
+                    }
+                    let body = "<html><body style='font-family:-apple-system;text-align:center;padding-top:40vh'><h2>Spotify connected — go back to lyrixyz</h2></body></html>"
+                    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+                    connection.send(content: response.data(using: .utf8),
+                                    completion: .contentProcessed { _ in connection.cancel() })
+                    if let code, let self {
+                        self.lock.lock()
+                        let first = !self.resumed
+                        self.resumed = true
+                        self.lock.unlock()
+                        if first {
+                            continuation.resume(returning: code)
+                        }
+                    }
+                }
+            }
+            listener.start(queue: .global())
+        }
+    }
+
+    func stop() {
+        listener?.cancel()
+        listener = nil
     }
 }
