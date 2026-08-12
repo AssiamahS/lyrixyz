@@ -1,8 +1,8 @@
 import Foundation
 import ActivityKit
 
-struct LyricsAttributes: ActivityAttributes {
-    public struct ContentState: Codable, Hashable {
+struct LyricsAttributes: ActivityAttributes, Sendable {
+    public struct ContentState: Codable, Hashable, Sendable {
         var line: String
         var nextLine: String
         var track: String

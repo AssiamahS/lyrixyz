@@ -11,6 +11,11 @@ struct LyricLine: Identifiable, Equatable {
     let text: String
 }
 
+/// Activity handles cross into detached tasks; ActivityKit's API is safe for this use.
+final class ActivityBox: @unchecked Sendable {
+    var activity: Activity<LyricsAttributes>?
+}
+
 @Observable
 @MainActor
 final class PlayerModel {
@@ -40,7 +45,7 @@ final class PlayerModel {
     private var isPlaying = false
     private var pollTask: Task<Void, Never>?
     private var tickTask: Task<Void, Never>?
-    private var activity: Activity<LyricsAttributes>?
+    private let activityBox = ActivityBox()
     private var keepalivePlayer: AVAudioPlayer?
     private var accessToken: String?
 
@@ -191,19 +196,30 @@ final class PlayerModel {
         let state = LyricsAttributes.ContentState(
             line: currentLine, nextLine: nextLine, track: track, artist: artist)
         let content = ActivityContent(state: state, staleDate: Date().addingTimeInterval(60))
-        if let activity {
-            Task { await activity.update(content) }
-        } else {
-            activity = try? Activity.request(
-                attributes: LyricsAttributes(service: service.rawValue),
-                content: content)
+        let attributes = LyricsAttributes(service: service.rawValue)
+        let box = activityBox
+        Task.detached {
+            if let activity = box.activity {
+                await activity.update(content)
+            } else {
+                box.activity = try? Activity.request(attributes: attributes, content: content)
+            }
         }
     }
 
     private func endActivityIfIdle() {
-        guard let running = activity, lines.isEmpty else { return }
-        activity = nil
-        Task { await running.end(nil, dismissalPolicy: .immediate) }
+        guard lines.isEmpty, activityBox.activity != nil else { return }
+        endActivity()
+    }
+
+    private func endActivity() {
+        let box = activityBox
+        Task.detached {
+            if let running = box.activity {
+                box.activity = nil
+                await running.end(nil, dismissalPolicy: .immediate)
+            }
+        }
     }
 
     // MARK: keepalive (lets the activity keep updating with the screen locked)
@@ -222,10 +238,7 @@ final class PlayerModel {
     private func stopKeepalive() {
         keepalivePlayer?.stop()
         keepalivePlayer = nil
-        if let running = activity {
-            activity = nil
-            Task { await running.end(nil, dismissalPolicy: .immediate) }
-        }
+        endActivity()
     }
 
     // MARK: spotify auth (PKCE — client id only, no secret)
