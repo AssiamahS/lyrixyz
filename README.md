@@ -1,5 +1,7 @@
 # lyrixyz
 
+**Install:** open [assiamahs.github.io/lyrixyz/install.html](https://assiamahs.github.io/lyrixyz/install.html) in Safari on your iPhone.
+
 Live synced lyrics on the Lock Screen and Dynamic Island while Spotify or Apple Music plays. Free lyric source (LRCLIB), on-device sync engine, offset slider for perfect timing.
 
 - **Apple Music**: works out of the box (reads the system player).
